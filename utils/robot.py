@@ -5,6 +5,7 @@ from enum import Enum
 from thymiodirect import Connection
 from thymiodirect import Thymio
 from pid import PIDController
+from auxils import translate
 import logging
 
 # Set up logging configuration
@@ -17,17 +18,6 @@ class Modes(Enum):
     RETURNING = 3
     AVOIDING = 4
     EMERGENCY_STOP = 5
-
-def translate(value, leftMin, leftMax, rightMin, rightMax):
-    # Figure out how 'wide' each range is
-    leftSpan = leftMax - leftMin
-    rightSpan = rightMax - rightMin
-
-    # Convert the left range into a 0-1 range (float)
-    valueScaled = float(value - leftMin) / float(leftSpan)
-
-    # Convert the 0-1 range into a value in the right range.
-    return rightMin + (valueScaled * rightSpan)
 
 class Point:
     def __init__(self, x: float, y: float):
@@ -320,4 +310,3 @@ if __name__ == "__main__":
         robot.move_to_point(Point(130, 90))
     except:
         robot.set_motors_speed(0, 0)
-

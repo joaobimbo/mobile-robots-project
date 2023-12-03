@@ -1,99 +1,28 @@
+import asyncio
 import math
 import time
 from collections import deque
 from enum import Enum
+from multiprocessing import Queue
+
+import cv2
 from thymiodirect import Connection
 from thymiodirect import Thymio
-from pid import PIDController
-from auxils import translate
+from utils.pid import PIDController
+from utils.auxils import translate, Point, Pose
 import logging
+import queue
 
 # Set up logging configuration
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 class Modes(Enum):
     VISUAL_SERVORING = 1
     STOPPED = 2
-    RETURNING = 3
-    AVOIDING = 4
-    EMERGENCY_STOP = 5
-
-class Point:
-    def __init__(self, x: float, y: float):
-        self.x = x
-        self.y = y
-
-    def update_position(self, x: float, y: float) -> (float, float):
-        self.x = x
-        self.y = y
-        return self.x, self.y
-
-    def get_position(self) -> (float, float):
-        return self.x, self.y
-
-    def get_x(self) -> float:
-        return self.x
-
-    def get_y(self) -> float:
-        return self.y
-
-    def distance_from(self, point: 'Point'):
-        return math.sqrt(math.pow(point.get_x() - self.x, 2) + math.pow(point.get_y() - self.y, 2))
-
-    def angle_with(self, point: 'Point', *, degrees: bool = None):
-        if degrees:
-            return math.degrees(math.atan2(point.get_x() - self.get_x(), point.get_y() - self.get_y()))
-        return math.atan2(point.get_y() - self.get_y(), point.get_x() - self.get_x())
-
-    def __str__(self):
-        return f"Point({round(self.x, 2)}mm, {round(self.y, 2)}mm)"
-
-class Pose(Point):
-    def __init__(self, x: float, y: float, angle: float):
-        super().__init__(x, y)
-        self.angle = angle
-
-    def update_pose(self, x: float, y: float, angle: float) -> (float, float, float):
-        super().update_position(x, y)
-        self.angle = angle % (2 * math.pi)
-        return super().get_x(), super().get_y(), self.angle
-
-    def get_pose(self, *, degrees: bool | None = None) -> (float, float, float):
-        return super().get_x(), super().get_y(), self.angle
-
-    def get_angle(self, *, degrees: bool | None = None) -> float:
-        if degrees:
-            return math.degrees(self.angle)
-        return self.angle
-
-    def get_normalized_angle(self, *, degrees: bool | None = None) -> float:
-        normalized_angle = (self.angle + math.pi) % (2 * math.pi) - math.pi
-        if degrees:
-            return math.degrees(normalized_angle)
-        return normalized_angle
-
-    def add_pose_variation(self, dx: float, dy: float, dth: float):
-        self.update_pose(self.x+dx, self.y+dy, self.angle+dth)
-
-    def interpolate_waypoints_to(self, point: Point, chunk_size: float) -> list:
-        waypoints = []
-        distance = self.distance_from(point)
-
-        # Number of waypoints to create, with 1cm intervals
-        num_waypoints = int(distance / chunk_size)
-
-        for i in range(1, num_waypoints + 1):
-            ratio = i / num_waypoints
-            waypoints.append(Point(
-                self.x + ratio * (point.get_x() - self.x),
-                self.y + ratio * (point.get_y() - self.y)
-            ))
-
-        return waypoints
-
-    def __str__(self):
-        return f"Pose({round(self.x, 2)}mm, {round(self.y, 2)}mm, {round(self.get_angle(degrees=True), 2)}º)"
+    RETURN = 3
+    MOVING = 4
+    AVOIDING = 5
+    EMERGENCY_STOP = 6
 
 class ThymioRobot:
     def __init__(self, L: float, *, refreshing_rate: float = 0.01, refreshing_coverage: dict | list = None, debug: bool = False):
@@ -125,6 +54,9 @@ class ThymioRobot:
         # Buffer of last values of speed (for 10ms of resampling this retains 10s of data)
         self.last_speeds = deque(maxlen=1000)
 
+        # State control
+        self.current_mode = Modes.STOPPED
+
         # Debug variables
         self.debug = debug
 
@@ -139,6 +71,11 @@ class ThymioRobot:
 
         # Add speeds to the speed buffer
         self.last_speeds.append((now, left_speed, right_speed))
+
+        # Handles the case where the robot is about to fall
+        if self.robot[self.node]["prox.ground.delta"][0] < 100 or self.robot[self.node]["prox.ground.delta"][1] < 100:
+            self.set_motors_speed(0, 0)
+            self.current_mode = Modes.STOPPED
 
         # Debug message
         if self.debug:
@@ -168,11 +105,11 @@ class ThymioRobot:
         if self.debug:
             self.logger.debug(f"Odometry -> dx: {round(dx, 3)}, dy: {round(dy, 3)}, dth: {round(math.degrees(dth), 3)}, {self.pose}")
 
-    def set_motors_speed(self, left: int, right: int) -> (int, int):
-        left_speed = max(min(left, 500), -500)
-        right_speed = max(min(right, 500), -500)
-        self.robot[self.node]["motor.left.target"] = int(left_speed)
-        self.robot[self.node]["motor.right.target"] = int(right_speed)
+    def set_motors_speed(self, left: int, right: int, *, min_vel: int = -500, max_vel: int = 500, dead_band: int = 0) -> (int, int):
+        left_speed = max(min(left, max_vel), min_vel)
+        right_speed = max(min(right, max_vel), min_vel)
+        self.robot[self.node]["motor.left.target"] = int(left_speed) if abs(left_speed) > dead_band else 0
+        self.robot[self.node]["motor.right.target"] = int(right_speed) if abs(right_speed) > dead_band else 0
 
         # Debug message
         if self.debug:
@@ -197,7 +134,7 @@ class ThymioRobot:
         # Checks motors speed targets
         left_target, right_target = self.get_motors_target()
 
-        # If target ==
+        # If target is 0 than return also 0 (to remove noise)
         if not left_target == 0:
             # This 700 is a 200 velocity margin because occasionally speed measurements go higher than 500
             if self.robot[self.node]["motor.left.speed"] > 700:
@@ -209,6 +146,7 @@ class ThymioRobot:
         else:
             left_speed = 0
 
+        # If target is 0 than return also 0 (to remove noise)
         if not right_target == 0:
             # This 700 is a 200 velocity margin because occasionally speed measurments go higher than 500
             if self.robot[self.node]["motor.right.speed"] > 700:
@@ -223,56 +161,6 @@ class ThymioRobot:
 
     def _is_at_target(self, point: Point, threshold: float) -> bool:
         return abs(point.get_x() - self.pose.get_x()) < threshold and abs(point.get_y() - self.pose.get_y()) < threshold
-
-    def move_to_point(self, point: Point):
-        # Interpolate waypoints between robot pose and the destiny
-        waypoints = robot.pose.interpolate_waypoints_to(point, 20)
-        for point in waypoints:
-            print(point)
-        # Info message
-        self.logger.info(f"Moving from -> {self.pose} to -> {point}")
-
-        # Flag to stop distance control when robot is WAYYYY out of the correct direction
-        at_angle = False
-
-        # Loop through waypoints and try to follow them
-        for point in waypoints:
-            # Create PID controllers for movement and orientation
-            d_pid = PIDController(0, 100, 1 / 100, 50).set_saturation(250, 0)
-            th_pid = PIDController(0, 200, 1/300, 200).set_saturation(400, -400)
-
-            # Loop the control until robot arrives to waypoint
-            while not self._is_at_target(point, self.pos_threshold):
-                time.sleep(0.01)
-
-                # Angle error (for th_pid) and distance (position error for d_pid)
-                angle_e = self.pose.angle_with(point) - self.pose.get_normalized_angle()
-                distance_e = -self.pose.distance_from(point)
-
-                # Enable 'at_flag' when angle error is acceptable
-                if (not at_angle) and abs(angle_e) < self.angle_threshold_lower:
-                    self.logger.info(f"Acceptable orientation -> error of {math.degrees(angle_e)} degrees")
-                    at_angle = True
-
-                # Disables 'at_flag' when error is unacceptable
-                if at_angle and abs(angle_e) > self.angle_threshold_upper:
-                    self.logger.warning(f"Unacceptable orientation -> error of {math.degrees(angle_e)} degrees")
-                    at_angle = False
-
-                # Updating PID controllers with respective inputs
-                d_out = d_pid.sample(distance_e) if at_angle else 0
-                th_out = th_pid.sample(angle_e)
-
-                # Assign robot velocities
-                l_speed = d_out - th_out
-                r_speed = d_out + th_out
-
-                self.set_motors_speed(l_speed, r_speed)
-            self.logger.info(f"Arrived at waypoint -> {point}")
-
-        # Stop at final waypoint arriving
-        self.set_motors_speed(0, 0)
-        self.logger.info(f"Arrived to final point -> {self.pose}")
 
     def _motors_speed_average_between(self, start_time, end_time) -> (float, float):
         # Filter buffered speeds in deque between start_time and end_time
@@ -302,11 +190,140 @@ class ThymioRobot:
         delta_t = end - start
         print(f"Average Speed: {avg}\tElapsed Time: {delta_t}ms")
 
+    def _visual_servoring_behavior(self, d_pid: PIDController, th_pid: PIDController, face: tuple):
+        x, y, size = face
+
+        # Handling situation where visual servoring does not detect any face
+        if x is None or size is None:
+            self.set_motors_speed(0, 0)
+            return self.logger.warning(f"No face being detected, stopping motors!")
+
+        d_out = d_pid.sample(4 - size)
+        th_out = th_pid.sample(x)
+
+        # Assign robot velocities
+        l_speed = d_out * math.exp(-1/100 * abs(x)) - th_out
+        r_speed = d_out * math.exp(-1/100 * abs(x)) + th_out
+
+        self.set_motors_speed(l_speed, r_speed, dead_band=50)
+
+    async def _handle_vision(self, vision_pipe: Queue, intermediate_queue: asyncio.Queue):
+        while True:
+            # Gets data from the pipe [TERMINATES LOOP IF TIMEOUT EXPIRES]
+            try:
+                frame, face_x, face_y, face_size, hand_gesture = vision_pipe.get(block=True, timeout=2)
+                await intermediate_queue.put((face_x, face_y, face_size, hand_gesture))
+
+                cv2.imshow('Face Tracking', frame)
+
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    cv2.destroyAllWindows()
+
+                await asyncio.sleep(0.001)
+
+                await asyncio.sleep(0.01)
+            except queue.Empty as e:
+                self.logger.critical(e)
+
+    async def _handle_robot(self, intermediate_queue: asyncio.Queue):
+        # Visual Servoring PID's
+        vs_d_pid = PIDController(0, 700, 0, 300).set_saturation(400, -400)
+        vs_th_pid = PIDController(0, 1, 0, 0).set_saturation(400, -400)
+        while True:
+            # Gets processed data from the vision handler task
+            data = await intermediate_queue.get()
+            face_x, face_y, face_size, hand_gesture = data
+
+            # Changes program mode on hand gesture from the vision
+            if hand_gesture == "PALM" and self.current_mode not in [Modes.STOPPED, Modes.RETURN]:
+                self.current_mode = Modes.STOPPED
+            elif hand_gesture == "THUMBS_UP" and self.current_mode not in [Modes.VISUAL_SERVORING, Modes.RETURN, Modes.MOVING]:
+                self.current_mode = Modes.VISUAL_SERVORING
+                vs_d_pid.reset()
+                vs_th_pid.reset()
+            elif hand_gesture == "PIECE_SIGN" and self.current_mode not in [Modes.RETURN, Modes.MOVING]:
+                self.current_mode = Modes.RETURN
+
+            # Make decisions based on the current mode
+            if self.current_mode == Modes.STOPPED:
+                self.set_motors_speed(0, 0)
+            elif self.current_mode == Modes.VISUAL_SERVORING:
+                self._visual_servoring_behavior(vs_d_pid, vs_th_pid, (face_x, face_y, face_size))
+            elif self.current_mode == Modes.RETURN:
+                start = Point(0, 0)
+                loop = asyncio.get_event_loop()
+                self.current_mode = Modes.MOVING
+                move_task = loop.create_task(self._move_to_point(start))
+                move_task.add_done_callback(lambda x: setattr(self, "current_mode", Modes.STOPPED))
+
+            # A small sleep to force the task to yield at least once
+            await asyncio.sleep(0.001)
+
+    async def _move_to_point(self, point: Point):
+        # Interpolate waypoints between robot pose and the destiny
+        waypoints = self.pose.interpolate_waypoints_to(point, 20)
+
+        # Info message
+        self.logger.info(f"Moving from -> {self.pose} to -> {point}")
+
+        # Loop through waypoints and try to follow them
+        for point in waypoints:
+            # Create PID controllers for movement and orientation
+            d_pid = PIDController(0, 250, 1 / 100, 30).set_saturation(500, 0)
+            th_pid = PIDController(0, 260, 0, 80).set_saturation(500, -500)
+
+            # Loop the control until robot arrives to waypoint
+            while not self._is_at_target(point, self.pos_threshold):
+                # Handles the case where the robot current mode is changed by other task
+                if self.current_mode != Modes.MOVING:
+                    return
+
+                # A small sleep to force the task to yield at least once
+                await asyncio.sleep(0.005)
+
+                # Angle error (for th_pid) and distance (position error for d_pid)
+                angle_e = ((self.pose.angle_with(point) - self.pose.get_angle()) + math.pi) % (2 * math.pi) - math.pi
+                distance_e = -self.pose.distance_from(point)
+
+                # Updating PID controllers with respective inputs
+                d_out = d_pid.sample(distance_e)
+                th_out = th_pid.sample(angle_e)
+
+                # Calculating speed with PID outputs (distance outputs is weighted based on angle error)
+                l_speed = d_out * math.exp(-18 * abs(angle_e)) - th_out
+                r_speed = d_out * math.exp(-18 * abs(angle_e)) + th_out
+
+                # Setting the motors speed with a dead band of 50 (from -50 to 50)
+                self.set_motors_speed(l_speed, r_speed, dead_band=50)
+            self.logger.info(f"Arrived at waypoint -> {point}")
+
+        # Stop at final waypoint arriving
+        self.set_motors_speed(0, 0)
+        if self._is_at_target(point, self.pos_threshold):
+            self.logger.info(f"Arrived to final point -> {self.pose}")
+
+    def run_loop(self, vision_pipe: Queue):
+        intermediate_queue = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+        loop.create_task(self._handle_vision(vision_pipe, intermediate_queue))
+        loop.create_task(self._handle_robot(intermediate_queue))
+        loop.run_forever()
+
+    def move_to_point(self, point: Point):
+        self.current_mode = Modes.MOVING
+        asyncio.run(self._move_to_point(point))
+        self.current_mode = Modes.STOPPED
+
+
 
 if __name__ == "__main__":
-    robot = ThymioRobot(93.5)
+    robot = ThymioRobot(93.5, debug=False)
     robot.set_motors_speed(0, 0)
     try:
-        robot.move_to_point(Point(130, 90))
+        """robot.move_to_point(Point(200, 0))
+        robot.move_to_point(Point(200, -100))
+        robot.move_to_point(Point(0, -100))
+        robot.move_to_point(Point(0, 0))"""
+        robot.move_to_point(Point(200, 0))
     except:
         robot.set_motors_speed(0, 0)

@@ -3,19 +3,28 @@ from cvzone.HandTrackingModule import HandDetector
 from cvzone.FaceDetectionModule import FaceDetector
 import cv2
 from multiprocessing import Process, Queue
-from auxils import translate
+from utils.auxils import translate
+import logging
+
+# Set up logging configuration
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 class ThymioVision(Process):
-    def __init__(self, cam_id: int, command_queue: Queue, data_queue: Queue):
+    def __init__(self, cam_id: int, data_queue: Queue, *, command_queue: Queue = None, debug: bool = False):
         super().__init__()
+        # Setting up logger for the ThymioVision
+        self.logger = logging.getLogger('ThymioVision')
+
+        # Queues/pipes
         self.data_queue = data_queue
         self.cmd_queue = command_queue
+
+        # Camera variables
         self.cam_id = cam_id
         self.camera = None
-        self.face_tracker = None
-        self.face_tracking_timeout = 1000
-        self.face_cascade = None
-        self.current_size = None
+
+        # Debug variables
+        self.debug = debug
 
     def draw_face_info(self, frame: cv2.typing.MatLike, box: tuple, face_center: tuple, distance_est: float) -> cv2.typing.MatLike:
         # Get box variables
@@ -63,7 +72,12 @@ class ThymioVision(Process):
 
         # Visual detectors
         face_detector = FaceDetector(minDetectionCon=0.7, modelSelection=1)
-        hand_detector = HandDetector(staticMode=False, maxHands=1, modelComplexity=0, detectionCon=0.5, minTrackCon=0.5)
+        hand_detector = HandDetector(staticMode=False, maxHands=1, modelComplexity=0, detectionCon=0.9, minTrackCon=0.5)
+
+        # Local variables for gesture filtering
+        last_gesture = None
+        gesture_counter = 0
+        gesture_threshold = 5  # Adjust this threshold as needed
 
         #Main visual recognition loop
         while True:
@@ -86,9 +100,32 @@ class ThymioVision(Process):
                 # Handle hand recognition
                 if hands:
                     hand = hands[0]
-                    fingers_up = hand_detector.fingersUp(hand).count(1)
+                    fingers_up = hand_detector.fingersUp(hand)
+                    match fingers_up:
+                        case [1, 0, 0, 0, 0]:
+                            gesture = "THUMBS_UP"
+                        case [1, 1, 1, 1, 1]:
+                            gesture = "PALM"
+                        case [0, 1, 1, 0, 0]:
+                            gesture = "PIECE_SIGN"
+                        case _:
+                            gesture = None
                 else:
-                    fingers_up = None
+                    fingers_up = gesture = None
+
+                # Check if the current gesture is the same as the previous one
+                if gesture is not None and gesture == last_gesture:
+                    gesture_counter += 1
+                    if gesture_counter >= gesture_threshold:
+                        # Gesture is stable, set the value
+                        stable_gesture = gesture
+                else:
+                    # Reset the counter if the current gesture is different
+                    gesture_counter = 0
+                    stable_gesture = None
+
+                # Store the current gesture for the next iteration
+                last_gesture = gesture
 
                 # Draw cross line in the center of the frame
                 frame_h, frame_w, channels = frame.shape
@@ -96,15 +133,16 @@ class ThymioVision(Process):
                 cv2.line(frame, (int(frame_w / 2), 0), (int(frame_w / 2), frame_h), (255, 0, 0), 1)
 
                 # Send processed data to the pipe
-                self.data_queue.put((frame, face_x, face_y, distance, fingers_up))
+                self.data_queue.put((frame, face_x, face_y, distance, stable_gesture))
+                time.sleep(0.01)
             except Exception as e:
-                print(e)
+                logging.error(e)
                 self.camera.release()
 
 if __name__ == "__main__":
     command_queue = Queue()
     data_queue = Queue()
-    vision = ThymioVision(0, command_queue, data_queue)
+    vision = ThymioVision(1, data_queue)
     vision.daemon = False
     vision.start()
     state = 0

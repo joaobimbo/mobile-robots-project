@@ -52,7 +52,7 @@ class PIDController:
 
         # Calculate error, error derivative and error integral
         self.err_current = self.sp - input
-        err_derivative = (self.err_current - self.err_previous)/delta_time
+        err_derivative = (self.err_current - self.err_previous)/delta_time if delta_time != 0 else 0
         self.err_integral = self._add_integral(self.err_current, delta_time)
 
         # Calculate the controller output
@@ -71,3 +71,9 @@ class PIDController:
         self.set_upper(upper)
         self.set_lower(lower)
         return self
+
+    def reset(self):
+        self.err_current = 0
+        self.err_previous = 0
+        self.err_integral = 0
+        self.time_previous = time.time_ns()

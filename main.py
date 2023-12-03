@@ -1,16 +1,30 @@
-# This is a sample Python script.
+import logging
+import sys
+import time
+from utils.robot import ThymioRobot
+from utils.vision import ThymioVision
+from multiprocessing import Queue
+import queue
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+# Set up logging configuration
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
+    logger = logging.getLogger("__main__")
+    robot = ThymioRobot(93.5, refreshing_rate=0.01, debug=False)
+    vision_pipe = Queue()
+    vision = ThymioVision(1, vision_pipe)
+    vision.daemon = True
+    vision.start()
+    try:
+        vision_pipe.get(block=True, timeout=20)
+    except queue.Empty as e:
+        vision.terminate()
+        time.sleep(1)
+        vision.close()
+        logger.critical(f"Failed to start vision process!")
+        sys.exit(-1)
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    robot.run_loop(vision_pipe)
+
+

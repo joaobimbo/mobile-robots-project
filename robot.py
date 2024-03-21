@@ -107,8 +107,8 @@ class ThymioRobot:
             self.current_mode = Modes.STOPPED
 
         # Debug message
-        if self.debug:
-            self.logger.debug(f"Robot variables refreshed! Time since last refresh -> {dt/1e6}ms")
+        #if self.debug:
+        #    self.logger.debug(f"Robot variables refreshed! Time since last refresh -> {dt/1e6}ms")
 
         # End of the method, declares variables for the next refresh
         self.prev_time = now
@@ -132,15 +132,15 @@ class ThymioRobot:
 
         # Calculates displacement on the new pose
         dth = (dl - dr) / self.L
-        dy = dc * math.sin(angle)
-        dx = dc * math.cos(angle)
+        dy = dc * math.sin(dth)
+        dx = dc * math.cos(dth)
 
         # Adds each variation to the current x, y, angle values
         self.pose.add_pose_variation(dx, dy, dth)
 
         # Debug message
-        if self.debug:
-            self.logger.debug(f"Odometry -> dx: {round(dx, 3)}, dy: {round(dy, 3)}, dth: {round(math.degrees(dth), 3)}, {self.pose}")
+       ## if self.debug:
+        #    self.logger.debug(f"Odometry -> dx: {round(dx, 3)}, dy: {round(dy, 3)}, dth: {round(math.degrees(dth), 3)}, {self.pose}")
 
     # Below methods are robot extra utilities to used with ThymioDirect library
     def set_motors_speed(self, left: int, right: int, *, min_vel: int = -500, max_vel: int = 500, dead_band: int = 0) -> (int, int):
@@ -166,6 +166,7 @@ class ThymioRobot:
         # Debug message
         if self.debug:
             self.logger.debug(f"Motors speed set to -> {left_speed}, {right_speed}")
+            self.logger.debug({f"Left: {left}, right: {right}"})
 
         return left_speed, right_speed
 
@@ -255,13 +256,16 @@ class ThymioRobot:
                 self.logger.warning(f"No face being detected, stopping motors!")
             return
 
-        d_out = d_pid.sample(6 - distance)
+        d_out = d_pid.sample(4 - distance) #0
         th_out = th_pid.sample(x)
+
+        self.logger.debug(f"D Out: {d_out}, thout: {th_out}")
 
         # Assign robot velocities
         l_speed = d_out * math.exp(-1/100 * abs(x)) - th_out
         r_speed = d_out * math.exp(-1/100 * abs(x)) + th_out
 
+        self.logger.debug(f"l_speed: {l_speed}, r_speed: {r_speed}\n")
         self.set_motors_speed(l_speed, r_speed, dead_band=50)
 
     async def _handle_vision(self, vision_pipe: multiprocessing.Queue, intermediate_queue: asyncio.Queue) -> None:
@@ -297,14 +301,15 @@ class ThymioRobot:
         # Create 0MQ client/subscriber to communicate with vision server
         ctx = aiozmq.Context()
         sock = ctx.socket(zmq.SUB)
-        sock.connect(f"tcp://{self.remote_addr}")
         sock.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribes to all messages
+        sock.connect(f"tcp://{self.remote_addr}")
 
         while True:
             self.logger.debug("Waiting for data from the vision publisher.")
             data = await sock.recv_string()
             self.logger.debug("Vision processed data received from the server!")
             face_x, face_size, hand_gesture = json.loads(data)
+            self.logger.debug(f"Face data received {json.loads(data)}")
             await intermediate_queue.put((face_x, face_size, hand_gesture))
             await asyncio.sleep(0.005)
 
@@ -323,7 +328,7 @@ class ThymioRobot:
             face_x, face_size, hand_gesture = data
 
             # Changes program mode on hand gesture from the vision
-            if hand_gesture == "PALM" and self.current_mode not in [Modes.STOPPED, Modes.RETURN]:
+            if (hand_gesture == "PALM") and self.current_mode not in [Modes.STOPPED, Modes.RETURN]:
                 self.logger.info("'PALM detected! Stopping the robot.'")
                 self.current_mode = Modes.STOPPED
             elif hand_gesture == "THUMBS_UP" and self.current_mode not in [Modes.VISUAL_SERVORING, Modes.RETURN, Modes.MOVING]:

@@ -45,7 +45,7 @@ class VisionProcessor(multiprocessing.Process):
         self.draw = draw
 
         # Visual filter
-        self.filter_threshold = 30  # Number of frames to do filter
+        self.filter_threshold = 10  # Number of frames to do filter
 
     def get_pipe(self) -> multiprocessing.Queue:
         """
@@ -156,6 +156,7 @@ class VisionProcessor(multiprocessing.Process):
                     box_x, box_y, box_w, box_h = face["bbox"]
                     face_x, face_y = self.map_coordinates(frame, face["center"][0], face["center"][1])
                     distance = 500/box_w
+                    # print(f"distance (500/box_w): {distance}")
                     if self.draw:
                         self.draw_face_info(frame, face["bbox"], (face_x, face_y), distance)
                 else:

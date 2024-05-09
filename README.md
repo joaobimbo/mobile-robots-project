@@ -102,11 +102,21 @@ pip install -r requirements.txt
 ```
 
 ## Raspberry Services Setup
-To setup the services to start when the raspberry pi starts, run the below:
+To setup the services to start when the raspberry pi starts, run the below.
+Add the service files under:
+```
+/etc/systemd/system/
+```
+
+Then run:
 ```shell
 sudo systemctl daemon-reload
-sudo systemctl enable service_template.service
-sudo systemctl start service_template.service
+sudo systemctl enable start_stream.service
+sudo systemctl start start_stream.service
+sudo systemctl enable start_hotspot.service
+sudo systemctl start start_hotspot.service
+sudo systemctl enable start_robot.service
+sudo systemctl start start_robot.service
 ```
 
 ## Usage

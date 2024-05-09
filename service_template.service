@@ -1,0 +1,9 @@
+[Unit]
+Description=Script Description
+After=network.target
+
+[Service]
+ExecStart=/path/to/script.sh
+
+[Install]
+WantedBy=default.target

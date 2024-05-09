@@ -45,7 +45,7 @@ class VisionProcessor(multiprocessing.Process):
         self.draw = draw
 
         # Visual filter
-        self.filter_threshold = 10  # Number of frames to do filter
+        self.filter_threshold = 5  # Number of frames to do filter
 
     def get_pipe(self) -> multiprocessing.Queue:
         """

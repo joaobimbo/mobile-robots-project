@@ -256,7 +256,7 @@ class ThymioRobot:
                 self.logger.warning(f"No face being detected, stopping motors!")
             return
 
-        d_out = d_pid.sample(4 - distance) #0
+        d_out = d_pid.sample(4 - distance) # distancia a que o robo esta da cara da pessoa
         th_out = th_pid.sample(x)
 
         self.logger.debug(f"D Out: {d_out}, thout: {th_out}")

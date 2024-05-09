@@ -1,1 +1,2 @@
-nmcli dev wifi hotspot ifname rasp-hotspot ssid rasp-hotspot password "PortoCampeao"
+#!/bin/bash
+nmcli dev wifi hotspot ssid rasp-hotspot password "PortoCampeao"

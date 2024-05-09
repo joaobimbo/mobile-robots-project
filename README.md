@@ -119,6 +119,11 @@ sudo systemctl enable start_robot.service
 sudo systemctl start start_robot.service
 ```
 
+You may also need to run the Network Manager. To do so, run:
+```shell
+sudo systemctl enable NetworkManager
+sudo systemctl start NetworkManager
+```
 ## Usage
 
 For more detail on how to user either *robot.py* or *server.py* run the command with -h (or --help) argument to check on what are the possible arguments and what are the required ones.

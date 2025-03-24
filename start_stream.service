@@ -1,0 +1,9 @@
+[Unit]
+Description=Ustream Service
+After=network.target
+
+[Service]
+ExecStart=~/Desktop/mobile-robots-project/ustreamer.sh
+
+[Install]
+WantedBy=default.target

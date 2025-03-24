@@ -1,0 +1,9 @@
+[Unit]
+Description=Raspberry Hotspot
+After=network.target
+
+[Service]
+ExecStart=~/Desktop/mobile-robots-project/rasp-hotspot.sh
+
+[Install]
+WantedBy=default.target

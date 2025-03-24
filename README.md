@@ -3,12 +3,18 @@
 This repository holds the source code for a final project developed in a Mobile Robots course in a Master's degree in IT at Faculdade de Ciências da Universidade de Lisboa.
 
 ## Table of Contents
-- [Overview](#overview)
-- [Directory Structure](#directory-structure)
-- [Dependencies](#dependencies)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Setup](#setup-used)
+- [Mobile Robots Project - Visual Servoring](#mobile-robots-project---visual-servoring)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Main Features](#main-features)
+  - [Directory Structure](#directory-structure)
+  - [Dependencies](#dependencies)
+  - [Installation](#installation)
+  - [Raspberry Services Setup](#raspberry-services-setup)
+  - [Usage](#usage)
+      - [Example for robot.py](#example-for-robotpy)
+      - [Example for server.py](#example-for-serverpy)
+  - [Setup Used](#setup-used)
 
 ## Overview
 
@@ -95,6 +101,29 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Raspberry Services Setup
+To setup the services to start when the raspberry pi starts, run the below.
+Add the service files under:
+```
+/etc/systemd/system/
+```
+
+Then run:
+```shell
+sudo systemctl daemon-reload
+sudo systemctl enable start_stream.service
+sudo systemctl start start_stream.service
+sudo systemctl enable start_hotspot.service
+sudo systemctl start start_hotspot.service
+sudo systemctl enable start_robot.service
+sudo systemctl start start_robot.service
+```
+
+You may also need to run the Network Manager. To do so, run:
+```shell
+sudo systemctl enable NetworkManager
+sudo systemctl start NetworkManager
+```
 ## Usage
 
 For more detail on how to user either *robot.py* or *server.py* run the command with -h (or --help) argument to check on what are the possible arguments and what are the required ones.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Start robot
+After=network.target
+
+[Service]
+ExecStart=~/Desktop/mobile-robots-project/robot.sh
+
+[Install]
+WantedBy=default.target

@@ -10,7 +10,7 @@ from utils import VisionProcessor
 if __name__ == "__main__":
     # Parsing arguments
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--cameraId', help='Id of camera', required=False, default='http://10.42.0.92:4747/video')
+    parser.add_argument('--cameraId', help='Id of camera', required=False, default='http://192.168.46.81:8080/video')
     parser.add_argument("--host", help="Host for zmq socket", required=False, default="*")
     parser.add_argument("--port", help="Port for zmq socket", required=False, type=int, default=5555)
     parser.add_argument("--debug", help="Enables debug messages", action="store_true", required=False)

@@ -14,6 +14,11 @@ from utils import PIDController
 from collections import deque
 from enum import Enum
 from thymiodirect import Connection, Thymio
+import signal
+
+def shutdown():
+    print("shutting down")
+    exit()
 
 class Modes(Enum):
     VISUAL_SERVORING = 1
@@ -256,7 +261,8 @@ class ThymioRobot:
                 self.logger.warning(f"No face being detected, stopping motors!")
             return
 
-        d_out = d_pid.sample(4 - distance) #0
+        #d_out = d_pid.sample(4 - distance) #0
+        d_out=0 #Don't move
         th_out = th_pid.sample(x)
 
         self.logger.debug(f"D Out: {d_out}, thout: {th_out}")
@@ -319,6 +325,7 @@ class ThymioRobot:
 
         :param intermediate_queue: The pipeline to receive data from vision handlers.
         """
+        print('handle_robot')
         # Visual Servoring PID's
         vs_d_pid = PIDController(0, 900, 0, 300).set_saturation(400, -400)
         vs_th_pid = PIDController(0, 1, 0, 0.5).set_saturation(400, -400)
@@ -326,19 +333,20 @@ class ThymioRobot:
             # Gets processed data from the vision handler task
             data = await intermediate_queue.get()
             face_x, face_size, hand_gesture = data
+            print(data)
 
             # Changes program mode on hand gesture from the vision
             if (hand_gesture == "PALM") and self.current_mode not in [Modes.STOPPED, Modes.RETURN]:
                 self.logger.info("'PALM detected! Stopping the robot.'")
                 self.current_mode = Modes.STOPPED
-            elif hand_gesture == "THUMBS_UP" and self.current_mode not in [Modes.VISUAL_SERVORING, Modes.RETURN, Modes.MOVING]:
-                self.logger.info("'THUMBS_UP' detected! Entering companion/follower mode.")
+            elif hand_gesture == "PIECE_SIGN" and self.current_mode not in [Modes.VISUAL_SERVORING, Modes.RETURN, Modes.MOVING]:
+                self.logger.info("'PIECE_SIGN' detected! Entering companion/follower mode.")
                 self.current_mode = Modes.VISUAL_SERVORING
                 vs_d_pid.reset()
                 vs_th_pid.reset()
-            elif hand_gesture == "PIECE_SIGN" and self.current_mode not in [Modes.RETURN, Modes.MOVING]:
-                self.logger.info("'PIECE_SIGN' detected! Returning to the start.")
-                self.current_mode = Modes.RETURN
+            #elif hand_gesture == "PIECE_SIGN" and self.current_mode not in [Modes.RETURN, Modes.MOVING]:
+            #    self.logger.info("'PIECE_SIGN' detected! Returning to the start.")
+            #    self.current_mode = Modes.RETURN
 
             # Make decisions based on the current mode
             if self.current_mode == Modes.STOPPED:
@@ -416,12 +424,24 @@ class ThymioRobot:
         intermediate_queue = asyncio.Queue()
         vision_pipe = multiprocessing.Queue()
         loop = asyncio.get_event_loop()
+
         if self.remote_vision:
             loop.create_task(self._handle_vision_remote(intermediate_queue))
         else:
             loop.create_task(self._handle_vision(vision_pipe, intermediate_queue))
         loop.create_task(self._handle_robot(intermediate_queue))
-        loop.run_forever()
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            print("Received exit, exiting")
+            tasks = asyncio.all_tasks(loop=loop)
+            for t in tasks:
+                t.cancel()
+            print('cancelled tasks')
+            loop.stop()
+            #loop.close()
+            exit()
+            
 
     def move_to_point(self, point: Point) -> None:
         """
@@ -466,7 +486,7 @@ class ThymioRobot:
 if __name__ == '__main__':
     # Parsing arguments
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--server_addr", help="Zmq server socket address (e.g 127.0.0.1:5555)", required=True)
+    parser.add_argument("--server_addr", help="Zmq server socket address (e.g 127.0.0.1:5555)", required=False, default='127.0.0.1:5555')
     parser.add_argument("--debug", help="Enables debug messages (a lots of them)", action="store_true", required=False)
     args = parser.parse_args()
 
@@ -475,5 +495,5 @@ if __name__ == '__main__':
     logging.basicConfig(level=debug_level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger("client")
 
-    robot = ThymioRobot(93.5, refreshing_rate=0.01, debug=args.debug, remote_vision=True, remote_addr=args.server_addr)
+    robot = ThymioRobot(93.5, refreshing_rate=0.1, debug=args.debug, remote_vision=True, remote_addr=args.server_addr)
     robot.run_loop()
